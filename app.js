@@ -5,6 +5,7 @@ const Product= require('./models/Product')
 const CartItem = require('./models/Cart');
 const port = process.env.PORT || 8081;
 const app = express();
+require('dotenv').config();
 
 
 app.use(express.json());  // for parsing application/json
@@ -16,7 +17,7 @@ let cors = require('cors');
 const Cart = require('./models/Cart');
 app.use(cors())
 
-mongoose.connect('mongodb://localhost:27017/shopingcart', { useNewUrlParser: true, useUnifiedTopology: true });
+mongoose.connect(process.env.DATABASE_URL, { useNewUrlParser: true, useUnifiedTopology: true });
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'connection error'));
 

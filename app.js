@@ -20,7 +20,7 @@ mongoose.connect('mongodb://localhost:27017/shopingcart', { useNewUrlParser: tru
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'connection error'));
 
-app.post('/', (req, res) => {
+app.post('/products', async (req, res) => {
     try {
         const { name, price, quantity } = req.body;
 
@@ -30,25 +30,23 @@ app.post('/', (req, res) => {
             quantity: quantity
         });
 
-        newProduct.save((err) => {
-            if (err) {
-                res.json({
-                    status: "error",
-                    message: err,
-                });
-            } else {
-                res.json({
-                    status: "success",
-                    message: 'Updated Successfully',
-                    data: newProduct
-                });
-            }
+        await newProduct.save(); // Use await to wait for the save operation to complete
+
+        res.json({
+            status: "success",
+            message: 'Product added successfully',
+            data: newProduct
         });
     } catch (error) {
-        // Handle exceptions or errors here
-        res.json(error)
+        console.error(error);
+        res.status(500).json({
+            status: "error",
+            message: "Internal server error.",
+            error: error
+        });
     }
 });
+
 
 app.get('/products', async (req, res) => {
     try {
@@ -73,8 +71,16 @@ app.get('/products', async (req, res) => {
 app.post('/cart', async (req, res) => {
     try {
         const { productId, quantity } = req.body;
+        const userIdentifier = 'user123'; // Replace with the actual user identifier
 
-        // Assuming you have a Product model defined
+        // Check if the user has an existing cart; create one if not
+        let userCart = await Cart.findOne({ userId: userIdentifier });
+
+        if (!userCart) {
+            userCart = new Cart({ userId: userIdentifier, items: [] });
+        }
+
+        // Check if the product exists
         const product = await Product.findById(productId);
 
         if (!product) {
@@ -91,25 +97,21 @@ app.post('/cart', async (req, res) => {
             });
         }
 
-        // Check if the user has an existing cart, or create one if not
-        let userCart = await Cart.findOne({ userId: req.session.userId });
+        // Check if the product is already in the user's cart; if yes, update the quantity
+        const existingCartItem = userCart.items.find(item => item.product.equals(productId));
 
-        if (!userCart) {
-            userCart = new Cart({
-                userId: req.session.userId, // Assuming you use sessions for user identification
-                items: [],
-            });
+        if (existingCartItem) {
+            existingCartItem.quantity += quantity;
+        } else {
+            userCart.items.push({ product: productId, quantity });
         }
-
-        // Add the product to the user's cart
-        userCart.items.push({ product: productId, quantity });
-
-        // Update the product's stock
-        product.quantity -= quantity;
-        await product.save();
 
         // Save the user's cart
         await userCart.save();
+
+        // Update the product's quantity
+        product.quantity -= quantity;
+        await product.save();
 
         res.status(200).json({
             status: "success",
@@ -125,106 +127,111 @@ app.post('/cart', async (req, res) => {
     }
 });
 
-app.get('/cart', async (req, res) => {
+
+app.get('/cart/:userId', async (req, res) => {
     try {
-        // Find the user's cart and populate the 'items.product' field to get product information
-        const userCart = await Cart.findOne({ userId: req.session.userId }).populate('items.product');
+        const userId = req.params.userId;
+
+        const userCart = await Cart.findOne({ userId }).populate('items.product');
 
         if (!userCart) {
             return res.status(404).json({
-                status: "error",
-                message: "Cart not found.",
+                status: 'error',
+                message: 'Cart not found.',
             });
         }
 
         res.status(200).json({
-            status: "success",
-            message: "Cart items loaded successfully.",
-            data: userCart.items, // Send the cart items with product information
+            status: 'success',
+            message: 'Cart items loaded successfully.',
+            data: userCart.items,
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({
-            status: "error",
-            message: "Internal server error.",
+            status: 'error',
+            message: 'Internal server error.',
             error: err,
         });
     }
 });
 
-app.delete('/cart/:productId', async (req, res) => {
+// Remove an item from the user's cart
+app.delete('/cart/:userId/:productId', async (req, res) => {
     try {
+        const userId = req.params.userId;
         const productIdToRemove = req.params.productId;
 
-        // Find the user's cart and update it to remove the specified product
-        const userCart = await Cart.findOne({ userId: req.session.userId });
+        const userCart = await Cart.findOne({ userId });
 
         if (!userCart) {
             return res.status(404).json({
-                status: "error",
-                message: "Cart not found.",
+                status: 'error',
+                message: 'Cart not found.',
             });
         }
 
-        // Find the index of the product to remove in the items array
-        const itemIndexToRemove = userCart.items.findIndex(item => item.product == productIdToRemove);
+        const itemIndexToRemove = userCart.items.findIndex(
+            (item) => item.product.equals(productIdToRemove)
+        );
 
         if (itemIndexToRemove === -1) {
             return res.status(404).json({
-                status: "error",
-                message: "Product not found in the cart.",
+                status: 'error',
+                message: 'Product not found in the cart.',
             });
         }
 
-        // Remove the product from the items array
         userCart.items.splice(itemIndexToRemove, 1);
 
-        // Save the updated cart
         await userCart.save();
 
         res.status(200).json({
-            status: "success",
-            message: "Product removed from the cart successfully.",
+            status: 'success',
+            message: 'Product removed from the cart successfully.',
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({
-            status: "error",
-            message: "Internal server error.",
+            status: 'error',
+            message: 'Internal server error.',
             error: err,
         });
     }
 });
 
 
-app.get('/cart/total', async (req, res) => {
+
+
+// Calculate the total price of items in the user's cart
+app.get('/cart/total/:userId', async (req, res) => {
     try {
-        // Find the user's cart and populate the 'items.product' field to get product information
-        const userCart = await Cart.findOne({ userId: req.session.userId }).populate('items.product');
+        const userId = req.params.userId;
+
+        const userCart = await Cart.findOne({ userId }).populate('items.product');
 
         if (!userCart) {
             return res.status(404).json({
-                status: "error",
-                message: "Cart not found.",
+                status: 'error',
+                message: 'Cart not found.',
             });
         }
 
-        // Calculate the total price
         let total = 0;
         for (const item of userCart.items) {
             total += item.quantity * item.product.price;
         }
 
         res.status(200).json({
-            status: "success",
-            message: "Total price calculated successfully.",
+            status: 'success',
+            message: 'Total price calculated successfully.',
             total: total,
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({
-            status: "error",
-            message: "Internal server error.",
+            status: 'error',
+            message: 'Internal server error.',
             error: err,
         });
     }
